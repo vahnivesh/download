@@ -36,9 +36,9 @@ app.post('/api/download', async (req, res) => {
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
+  // ── yt-dlp args (NO trimming here) ──
   let args = [];
 
-  // ── yt-dlp args (NO trimming here) ──
   if (format === 'mp3') {
     args = [
       '-x',
@@ -62,7 +62,14 @@ app.post('/api/download', async (req, res) => {
 
   console.log('[yt-dlp args]', args.join(' '));
 
-  const ytdlp = spawn('python3', ['-m', 'yt_dlp', ...args]);
+  // 🔥 FIX: use yt-dlp directly (NOT python3)
+  const ytdlp = spawn('yt-dlp', args);
+
+  // Handle spawn errors (important)
+  ytdlp.on('error', (err) => {
+    console.error('[spawn error]', err);
+    return res.status(500).json({ error: 'Failed to start yt-dlp' });
+  });
 
   let stderr = '';
 
@@ -79,16 +86,28 @@ app.post('/api/download', async (req, res) => {
       return res.status(500).json({ error: stderr || 'yt-dlp failed' });
     }
 
-    // ── Run ffmpeg trimming ──
-    console.log('[ffmpeg] trimming...');
+    console.log('[yt-dlp] download complete');
 
-    const ffmpeg = spawn('ffmpeg', [
-      '-ss', startSec.toString(),
-      '-t', durationSec.toString(),
-      '-i', tempFile,
-      '-c', 'copy',
-      trimmedFile
-    ]);
+    // ── ffmpeg trimming ──
+    const ffmpegArgs =
+      format === 'mp3'
+        ? [
+            '-ss', startSec.toString(),
+            '-t', durationSec.toString(),
+            '-i', tempFile,
+            trimmedFile
+          ]
+        : [
+            '-ss', startSec.toString(),
+            '-t', durationSec.toString(),
+            '-i', tempFile,
+            '-c', 'copy',
+            trimmedFile
+          ];
+
+    console.log('[ffmpeg args]', ffmpegArgs.join(' '));
+
+    const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
     ffmpeg.stderr.on('data', d => {
       console.error('[ffmpeg]', d.toString());
@@ -102,7 +121,7 @@ app.post('/api/download', async (req, res) => {
         return res.status(500).json({ error: 'ffmpeg failed' });
       }
 
-      console.log('[ffmpeg] done, streaming file');
+      console.log('[ffmpeg] done, streaming');
 
       // ── Stream trimmed file ──
       res.setHeader(
@@ -133,7 +152,7 @@ app.post('/api/download', async (req, res) => {
     });
   });
 
-  // ── Handle client disconnect ──
+  // Kill process if client disconnects
   req.on('close', () => {
     ytdlp.kill();
     try { fs.unlinkSync(tempFile); } catch {}
