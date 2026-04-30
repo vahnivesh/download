@@ -54,7 +54,7 @@ app.post('/api/download', async (req, res) => {
 
   console.log('[yt-dlp]', args.join(' '));
 
-  const ytdlp = spawn('yt-dlp', args);
+  const ytdlp = spawn('python3', ['-m', 'yt_dlp', ...args]);
 
   let stderr = '';
   ytdlp.stderr.on('data', d => { stderr += d.toString(); });
@@ -65,7 +65,7 @@ app.post('/api/download', async (req, res) => {
       console.error('[yt-dlp error]', stderr);
       // Clean up if partial file exists
       try { fs.unlinkSync(outFile); } catch {}
-      return res.status(500).json({ error: 'yt-dlp failed', details: stderr.slice(-500) });
+      return res.status(500).json({ error: stderr || 'yt-dlp failed' });
     }
 
     // Stream file to client then delete
