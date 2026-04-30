@@ -21,19 +21,18 @@ app.get('/', (req, res) => {
 app.post('/api/download', async (req, res) => {
   let responded = false;
 
-  const { videoId, startSec, durationSec, format, quality, filename } = req.body;
+  const { videoId, startSec, durationSec, format, quality, filename, fullVideo } = req.body;
 
   if (!videoId || startSec == null || durationSec == null) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  console.log('[REQUEST]', { videoId, startSec, durationSec, format, quality });
+  console.log('[REQUEST]', { videoId, startSec, durationSec, format, quality, fullVideo });
 
   const safeName = (filename || 'trimmed_clip').replace(/[^\w\-. ]/g, '_');
   const ext = format === 'mp3' ? 'mp3' : 'mp4';
 
   const tempFile = path.join(os.tmpdir(), `${crypto.randomUUID()}_raw.${ext}`);
-  const trimmedFile = path.join(os.tmpdir(), `${crypto.randomUUID()}_trimmed.${ext}`);
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
@@ -62,9 +61,6 @@ app.post('/api/download', async (req, res) => {
   }
 
   console.log('[yt-dlp args]', args.join(' '));
-
-  // 🔥 Always works on Railway
-  
 
   const ytdlp = spawn('/usr/local/bin/yt-dlp', args);
 
@@ -97,7 +93,40 @@ app.post('/api/download', async (req, res) => {
 
     console.log('[yt-dlp] download complete');
 
-    // ── ffmpeg trimming ──
+    // ── Full video: skip ffmpeg, stream directly ──
+    if (fullVideo) {
+      console.log('[mode] full video — streaming without trim');
+
+      if (responded) return;
+      responded = true;
+
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${safeName}.${ext}"`
+      );
+      res.setHeader(
+        'Content-Type',
+        ext === 'mp3' ? 'audio/mpeg' : 'video/mp4'
+      );
+
+      const stream = fs.createReadStream(tempFile);
+      stream.pipe(res);
+
+      stream.on('end', () => {
+        try { fs.unlinkSync(tempFile); } catch {}
+      });
+
+      stream.on('error', (err) => {
+        console.error('[stream error]', err);
+        try { fs.unlinkSync(tempFile); } catch {}
+      });
+
+      return;
+    }
+
+    // ── Trimmed video: run ffmpeg ──
+    const trimmedFile = path.join(os.tmpdir(), `${crypto.randomUUID()}_trimmed.${ext}`);
+
     const ffmpegArgs =
       format === 'mp3'
         ? [
@@ -117,6 +146,16 @@ app.post('/api/download', async (req, res) => {
     console.log('[ffmpeg args]', ffmpegArgs.join(' '));
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+
+    ffmpeg.on('error', (err) => {
+      console.error('[ffmpeg spawn error]', err);
+      try { fs.unlinkSync(tempFile); } catch {}
+      try { fs.unlinkSync(trimmedFile); } catch {}
+      if (!responded) {
+        responded = true;
+        return res.status(500).json({ error: 'ffmpeg failed to start' });
+      }
+    });
 
     ffmpeg.stderr.on('data', d => {
       console.error('[ffmpeg]', d.toString());
@@ -167,23 +206,9 @@ app.post('/api/download', async (req, res) => {
   req.on('close', () => {
     ytdlp.kill();
     try { fs.unlinkSync(tempFile); } catch {}
-    try { fs.unlinkSync(trimmedFile); } catch {}
   });
-});
-
-ffmpeg.on('error', (err) => {
-  console.error('[ffmpeg spawn error]', err);
-  try { fs.unlinkSync(tempFile); } catch {}
-  try { fs.unlinkSync(trimmedFile); } catch {}
-  if (!responded) {
-    responded = true;
-    return res.status(500).json({ error: 'ffmpeg failed to start' });
-  }
 });
 
 app.listen(PORT, () => {
   console.log(`ClipCut server listening on port ${PORT}`);
 });
-
-
-
