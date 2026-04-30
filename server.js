@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const { spawn } = require('child_process');
@@ -20,6 +19,8 @@ app.get('/', (req, res) => {
 
 // ── Download endpoint ──
 app.post('/api/download', async (req, res) => {
+  let responded = false;
+
   const { videoId, startSec, durationSec, format, quality, filename } = req.body;
 
   if (!videoId || startSec == null || durationSec == null) {
@@ -36,7 +37,7 @@ app.post('/api/download', async (req, res) => {
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // ── yt-dlp args (NO trimming here) ──
+  // ── yt-dlp args ──
   let args = [];
 
   if (format === 'mp3') {
@@ -62,13 +63,15 @@ app.post('/api/download', async (req, res) => {
 
   console.log('[yt-dlp args]', args.join(' '));
 
-  // 🔥 FIX: use yt-dlp directly (NOT python3)
-  const ytdlp = spawn('yt-dlp', args);
+  // 🔥 Always works on Railway
+  const ytdlp = spawn('python3', ['-m', 'yt_dlp', ...args]);
 
-  // Handle spawn errors (important)
   ytdlp.on('error', (err) => {
     console.error('[spawn error]', err);
-    return res.status(500).json({ error: 'Failed to start yt-dlp' });
+    if (!responded) {
+      responded = true;
+      return res.status(500).json({ error: 'yt-dlp failed to start' });
+    }
   });
 
   let stderr = '';
@@ -83,7 +86,11 @@ app.post('/api/download', async (req, res) => {
     if (code !== 0) {
       console.error('[yt-dlp error]', stderr);
       try { fs.unlinkSync(tempFile); } catch {}
-      return res.status(500).json({ error: stderr || 'yt-dlp failed' });
+      if (!responded) {
+        responded = true;
+        return res.status(500).json({ error: stderr || 'yt-dlp failed' });
+      }
+      return;
     }
 
     console.log('[yt-dlp] download complete');
@@ -118,12 +125,18 @@ app.post('/api/download', async (req, res) => {
         console.error('[ffmpeg error]');
         try { fs.unlinkSync(tempFile); } catch {}
         try { fs.unlinkSync(trimmedFile); } catch {}
-        return res.status(500).json({ error: 'ffmpeg failed' });
+        if (!responded) {
+          responded = true;
+          return res.status(500).json({ error: 'ffmpeg failed' });
+        }
+        return;
       }
 
       console.log('[ffmpeg] done, streaming');
 
-      // ── Stream trimmed file ──
+      if (responded) return;
+      responded = true;
+
       res.setHeader(
         'Content-Disposition',
         `attachment; filename="${safeName}.${ext}"`
@@ -145,14 +158,10 @@ app.post('/api/download', async (req, res) => {
         console.error('[stream error]', err);
         try { fs.unlinkSync(tempFile); } catch {}
         try { fs.unlinkSync(trimmedFile); } catch {}
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Stream error' });
-        }
       });
     });
   });
 
-  // Kill process if client disconnects
   req.on('close', () => {
     ytdlp.kill();
     try { fs.unlinkSync(tempFile); } catch {}
