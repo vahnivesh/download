@@ -64,7 +64,9 @@ app.post('/api/download', async (req, res) => {
   console.log('[yt-dlp args]', args.join(' '));
 
   // 🔥 Always works on Railway
-  const ytdlp = spawn('python3', ['-m', 'yt_dlp', ...args]);
+  const ytdlpCmd = process.env.YTDLP_PATH || 'yt-dlp';
+
+  const ytdlp = spawn(ytdlpCmd, args);
 
   ytdlp.on('error', (err) => {
     console.error('[spawn error]', err);
