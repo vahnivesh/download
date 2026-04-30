@@ -64,9 +64,9 @@ app.post('/api/download', async (req, res) => {
   console.log('[yt-dlp args]', args.join(' '));
 
   // 🔥 Always works on Railway
-  const ytdlpCmd = process.env.YTDLP_PATH || 'yt-dlp';
+  
 
-  const ytdlp = spawn(ytdlpCmd, args);
+  const ytdlp = spawn('/usr/local/bin/yt-dlp', args);
 
   ytdlp.on('error', (err) => {
     console.error('[spawn error]', err);
@@ -171,7 +171,19 @@ app.post('/api/download', async (req, res) => {
   });
 });
 
+ffmpeg.on('error', (err) => {
+  console.error('[ffmpeg spawn error]', err);
+  try { fs.unlinkSync(tempFile); } catch {}
+  try { fs.unlinkSync(trimmedFile); } catch {}
+  if (!responded) {
+    responded = true;
+    return res.status(500).json({ error: 'ffmpeg failed to start' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`ClipCut server listening on port ${PORT}`);
 });
+
+
 
